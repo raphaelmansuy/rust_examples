@@ -3,6 +3,7 @@ use serde::{Deserialize};
 use std::io::{BufRead, BufReader, Cursor};
 use reqwest::Client;
 use std::error::Error;
+use futures::stream::Stream;
 
 #[derive(Deserialize, Debug)]
 struct User {
@@ -22,16 +23,19 @@ fn create_line_stream<R: BufRead>(reader: R) -> impl Iterator<Item = Result<Stri
     })
 }
 
-async fn fetch_lines(url: &str) -> Result<impl Iterator<Item = Result<String, Box<dyn Error + Send + Sync>>>, Box<dyn Error + Send + Sync>> {
+async fn fetch_lines(url: &str) -> Result<impl Stream<Item = Result<String, Box<dyn Error + Send + Sync>>>, Box<dyn Error + Send + Sync>> {
     let client = Client::new();
     let response = client.get(url).send().await?;
 
     let status = response.status();
-    let body = response.text().await?;
-    let reader = Cursor::new(body);
+    let body = response.bytes_stream();
 
-    if status.is_success() { // Use the stored status
-        Ok(create_line_stream(reader).map(|r| r.map_err(|e| e.into())))
+    if status.is_success() {
+        Ok(body.map(|chunk| {
+            chunk.map_err(|e| e.into()).and_then(|chunk| {
+                String::from_utf8(chunk.to_vec()).map_err(|e| e.into())
+            })
+        }))
     } else {
         let error_msg = format!("Error: {}", status);
         Err(std::io::Error::new(std::io::ErrorKind::Other, error_msg).into())
@@ -42,12 +46,14 @@ async fn fetch_lines(url: &str) -> Result<impl Iterator<Item = Result<String, Bo
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let url = "http://127.0.0.1:8080/users";
     let mut lines = fetch_lines(url).await?;
-    let users: Vec<User> = lines
-        .by_ref()
-        .filter_map(|line| line.ok())
-        .filter_map(|line| serde_json::from_str::<User>(&line).ok())
-        .collect();
 
-    println!("{:#?}", users);
+    while let Some(line) = lines.next().await {
+        if let Ok(line) = line {
+            if let Ok(user) = serde_json::from_str::<User>(&line) {
+                println!("User: {:?}", user);
+            }
+        }
+    }
+
     Ok(())
 }
