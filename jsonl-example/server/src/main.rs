@@ -23,6 +23,14 @@ async fn stream_users() -> HttpResponse {
             id: 2,
             name: "Bob".to_string(),
         },
+        User {
+            id: 3,
+            name: "Charlie".to_string(),
+        },
+        User {
+            id: 4,
+            name: "David".to_string(),
+        },
         // Add more users as needed
     ];
 
@@ -30,6 +38,8 @@ async fn stream_users() -> HttpResponse {
     let user_stream = futures::stream::iter(users)
         .map(|user| {
             let json = serde_json::to_string(&user).unwrap();
+            // Wait 1 second before sending the next user
+            std::thread::sleep(std::time::Duration::from_secs(1));
             Ok::<_, actix_web::error::Error>(actix_web::web::Bytes::from(format!("{}\n", json)))
         });
 
